@@ -90,10 +90,10 @@ def test_marts(db):
         _run(6, 7, 5.0, 1.0),                                                  # impossible pace -> filtered out
     ]
     acts[4]["moving_time"] = 3600
-    # best efforts: run 3 (10 km) contains the fastest 5 km (20:00), faster than the 5 km run 2 (23:24)
+    # best efforts (names exactly as Strava sends them: "5K", "10K", "Half-Marathon"): run 3 (10 km) contains the fastest 5 km (20:00), faster than the 5 km run 2 (23:24)
     efforts = {
-        1_000_002: [("5k", 5000, 1404, "2026-03-03T07:00:00Z")],
-        1_000_003: [("5k", 5000, 1200, "2026-03-04T07:00:00Z"), ("10k", 10000, 3300, "2026-03-04T07:00:00Z")],
+        1_000_002: [("5K", 5000, 1404, "2026-03-03T07:00:00Z")],
+        1_000_003: [("5K", 5000, 1200, "2026-03-04T07:00:00Z"), ("10K", 10000, 3300, "2026-03-04T07:00:00Z")],
         1_000_004: [("Half-Marathon", 21097, 7500, "2026-03-06T07:00:00Z")],
     }
     def detail(token, activity_id):

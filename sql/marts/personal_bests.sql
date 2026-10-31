@@ -6,9 +6,9 @@ DROP VIEW IF EXISTS marts.personal_bests;
 CREATE VIEW marts.personal_bests AS
 WITH ranked AS (
     SELECT
-        CASE effort_name                                   -- nicer names
+        CASE lower(effort_name)                            -- lower(): don't depend on how Strava capitalises
             WHEN '1k' THEN '1K' WHEN '5k' THEN '5K' WHEN '10k' THEN '10K'
-            WHEN 'Half-Marathon' THEN 'Half marathon'
+            WHEN 'half-marathon' THEN 'Half marathon'
         END                                                AS distance,
         activity_id,
         activity_date,
@@ -19,7 +19,7 @@ WITH ranked AS (
             ORDER BY elapsed_time_s, activity_date         -- fastest first; on a tie, the earlier run wins
         )                                                  AS rank
     FROM core.fact_best_efforts
-    WHERE effort_name IN ('1k', '5k', '10k', 'Half-Marathon')
+    WHERE lower(effort_name) IN ('1k', '5k', '10k', 'half-marathon')
 )
 SELECT
     distance,
