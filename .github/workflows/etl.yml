@@ -1,0 +1,29 @@
+name: Strava ETL
+
+on:
+  schedule:
+    - cron: '17 21 * * *'     # every day 06:17 Seoul time
+  workflow_dispatch:
+    inputs:
+      full_refresh:
+        description: 'Re-download all activities'
+        type: boolean
+        default: false
+
+jobs:
+  load:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -r requirements.txt
+      - name: Extract from Strava and load into PostgreSQL
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          STRAVA_CLIENT_ID: ${{ secrets.STRAVA_CLIENT_ID }}
+          STRAVA_CLIENT_SECRET: ${{ secrets.STRAVA_CLIENT_SECRET }}
+          STRAVA_REFRESH_TOKEN: ${{ secrets.STRAVA_REFRESH_TOKEN }}
+          FULL_REFRESH: ${{ inputs.full_refresh && '1' || '0' }}
+        run: python -m etl.extract_load
