@@ -3,7 +3,7 @@
 An automated ELT pipeline that loads my Strava activities into PostgreSQL every day and models them
 into analytics tables with SQL.
 
-> **Status: in progress.** Extract & load, raw/staging/core layers and tests are done. Next: SQL marts and a dashboard.
+> **Status: in progress.** Extract & load, all four layers (raw → staging → core → marts) and tests are done. Next: a dashboard.
 
 ## Architecture
 
@@ -30,10 +30,19 @@ etl/extract_load.py        extract from Strava, load into raw
 sql/01_schema.sql          schemas, raw tables
 sql/02_staging.sql         staging.activities
 sql/03_core.sql            core.dim_sport, core.fact_activities
-sql/marts/                 analytics views (see sql/marts/README.md)
+sql/marts/                 analytics views: weekly_volume, pace_trend, personal_bests, training_streaks
 tests/test_pipeline.py     end-to-end test
 .github/workflows/         daily ETL job + tests on every push
 ```
+
+## The marts
+
+| View | Question | SQL technique |
+|---|---|---|
+| `marts.weekly_volume` | How much did I train each week, per sport? | `DATE_TRUNC`, `GROUP BY` |
+| `marts.pace_trend` | Am I getting faster? | window function, 5-run moving average |
+| `marts.personal_bests` | Fastest 5K, 10K and half marathon? | CTEs, `CASE`, `ROW_NUMBER() OVER (PARTITION BY ...)` |
+| `marts.training_streaks` | Longest streaks of consecutive training days? | gaps-and-islands (`date - ROW_NUMBER()`) |
 
 ## Run it
 

@@ -71,3 +71,40 @@ def test_failed_run_is_logged(db):
     assert extract_load.run(fetch=broken_fetch, get_token=lambda: "t") == 1
     with psycopg.connect(db) as conn:
         assert conn.execute("SELECT status FROM raw.load_runs").fetchone()[0] == "failed"
+
+
+def _run(i, day, km, pace_min, sport="Run"):
+    """A hand-made activity on a given date (UTC morning) with an exact distance and pace."""
+    a = fake_activity(i, datetime(2026, 3, day, 0, 0, tzinfo=timezone.utc))
+    a.update(sport_type=sport, type=sport, distance=km * 1000,
+             moving_time=int(km * pace_min * 60), map={"summary_polyline": "abc"})
+    return a
+
+
+def test_marts(db):
+    acts = [
+        _run(1, 2, 5.0, 5.0), _run(2, 3, 5.2, 4.5), _run(3, 4, 10.0, 5.5),   # Mon-Wed: 3-day streak
+        _run(4, 6, 21.1, 6.0), _run(5, 7, 30.0, 0, sport="Ride"),             # Fri-Sat: 2-day streak
+        _run(6, 7, 5.0, 1.0),                                                  # impossible pace -> filtered out
+    ]
+    acts[4]["moving_time"] = 3600
+    assert extract_load.run(fetch=lambda t, after: acts, get_token=lambda: "t") == 0
+
+    with psycopg.connect(db) as conn:
+        q = lambda sql: conn.execute(sql).fetchall()
+        # weekly_volume: totals per week & category add up
+        wk = q("SELECT week_start::text, category, activities, distance_km::float FROM marts.weekly_volume "
+               "ORDER BY category")
+        assert ("2026-03-02", "ride", 1, 30.0) in wk
+        assert ("2026-03-02", "run", 5, 46.3) in wk
+        # pace_trend: bad pace removed, moving average of the first two runs = (5.0 + 4.5) / 2
+        pt = q("SELECT pace_min_per_km::float, pace_5_run_avg::float FROM marts.pace_trend ORDER BY activity_date")
+        assert len(pt) == 4 and pt[1] == (4.5, 4.75)
+        # personal_bests: fastest 5K is the 4:30/km run, estimated time 22:30
+        pb = q("SELECT distance_bucket, rank, pace_min_per_km::float, estimated_time::text "
+               "FROM marts.personal_bests ORDER BY distance_bucket, rank")
+        assert ("5K", 1, 4.5, "00:22:30") in pb and ("5K", 2, 5.0, "00:25:00") in pb
+        assert {r[0] for r in pb} == {"5K", "10K", "Half marathon"}
+        # training_streaks: Mon-Wed (3 days) and Fri-Sat (2 days)
+        st = q("SELECT streak_start::text, days FROM marts.training_streaks ORDER BY streak_start")
+        assert st == [("2026-03-02", 3), ("2026-03-06", 2)]

@@ -56,8 +56,11 @@ def fetch_activities(token: str, after_epoch: int) -> list[dict]:
 
 
 def setup_schema(conn) -> None:
-    for f in ["01_schema.sql", "02_staging.sql", "03_core.sql"]:
-        conn.execute((SQL_DIR / f).read_text())
+    """Create / update all layers. Marts are views, so they always show the latest data."""
+    files = [SQL_DIR / f for f in ["01_schema.sql", "02_staging.sql", "03_core.sql"]]
+    files += sorted((SQL_DIR / "marts").glob("*.sql"))
+    for f in files:
+        conn.execute(f.read_text())
 
 
 def latest_start_epoch(conn) -> int:
