@@ -12,6 +12,13 @@ CREATE TABLE IF NOT EXISTS raw.strava_activities (
     fetched_at   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- RAW: detailed activity (one extra API call per run), mainly for Strava's "best efforts".
+CREATE TABLE IF NOT EXISTS raw.strava_activity_details (
+    activity_id  BIGINT PRIMARY KEY,
+    payload      JSONB       NOT NULL,
+    fetched_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 -- Bookkeeping for every pipeline run (useful for monitoring and debugging).
 CREATE TABLE IF NOT EXISTS raw.load_runs (
     run_id        BIGSERIAL PRIMARY KEY,

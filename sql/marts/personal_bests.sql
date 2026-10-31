@@ -1,43 +1,34 @@
--- QUESTION: What are my fastest 5 km, 10 km and half marathon runs?
--- Note: Strava's activity list only has the average pace of the whole run, so a "10 km PB" here is
--- the fastest run whose total distance was about 10 km (not the fastest 10 km inside a longer run).
-CREATE OR REPLACE VIEW marts.personal_bests AS
-WITH runs AS (                                     -- step 1: put every run into a distance bucket
+-- QUESTION: What are my fastest 1 km, 5 km, 10 km and half marathon?
+-- Uses Strava's "best efforts": the fastest time over each distance ANYWHERE inside a run.
+-- So a fast 5 km in the middle of a 12 km run counts too (unlike using the total distance of a run).
+-- The column list changed in this version, so the old view is dropped first.
+DROP VIEW IF EXISTS marts.personal_bests;
+CREATE VIEW marts.personal_bests AS
+WITH ranked AS (
     SELECT
+        CASE effort_name                                   -- nicer names
+            WHEN '1k' THEN '1K' WHEN '5k' THEN '5K' WHEN '10k' THEN '10K'
+            WHEN 'Half-Marathon' THEN 'Half marathon'
+        END                                                AS distance,
         activity_id,
         activity_date,
-        distance_km,
+        elapsed_time_s,
         pace_min_per_km,
-        CASE
-            WHEN distance_km BETWEEN 4.9  AND 5.5  THEN '5K'
-            WHEN distance_km BETWEEN 9.8  AND 10.8 THEN '10K'
-            WHEN distance_km BETWEEN 21.0 AND 22.0 THEN 'Half marathon'
-        END                                        AS distance_bucket,
-        CASE                                       -- official distance, to estimate the finish time
-            WHEN distance_km BETWEEN 4.9  AND 5.5  THEN 5
-            WHEN distance_km BETWEEN 9.8  AND 10.8 THEN 10
-            WHEN distance_km BETWEEN 21.0 AND 22.0 THEN 21.0975
-        END                                        AS official_km
-    FROM core.fact_activities
-    WHERE category = 'run'
-      AND pace_min_per_km BETWEEN 2.5 AND 12
-),
-ranked AS (                                        -- step 2: rank the runs inside each bucket, fastest = 1
-    SELECT
-        *,
-        ROW_NUMBER() OVER (PARTITION BY distance_bucket ORDER BY pace_min_per_km) AS rank
-    FROM runs
-    WHERE distance_bucket IS NOT NULL
+        ROW_NUMBER() OVER (
+            PARTITION BY effort_name                       -- a separate ranking for each distance
+            ORDER BY elapsed_time_s, activity_date         -- fastest first; on a tie, the earlier run wins
+        )                                                  AS rank
+    FROM core.fact_best_efforts
+    WHERE effort_name IN ('1k', '5k', '10k', 'Half-Marathon')
 )
-SELECT                                             -- step 3: keep the top 3 of each bucket
-    distance_bucket,
+SELECT
+    distance,
     rank,
     activity_id,
     activity_date,
-    distance_km,
-    pace_min_per_km,
-    MAKE_INTERVAL(secs => ROUND(pace_min_per_km * 60 * official_km)) AS estimated_time
+    MAKE_INTERVAL(secs => elapsed_time_s)                  AS time,
+    pace_min_per_km
 FROM ranked
 WHERE rank <= 3;
 
--- Example: SELECT * FROM marts.personal_bests ORDER BY distance_bucket, rank;
+-- Example: SELECT * FROM marts.personal_bests ORDER BY distance, rank;

@@ -11,6 +11,8 @@ import pytest
 
 from etl import extract_load
 
+NO_DETAIL = lambda token, activity_id: {"id": activity_id, "best_efforts": []}
+
 SPORTS = [("Run", 10_000, 330), ("Ride", 40_000, 120), ("Hike", 8_000, 700), ("WeightTraining", 0, 0)]
 
 
@@ -50,8 +52,8 @@ def test_load_is_incremental_and_idempotent(db, monkeypatch):
                 .replace(tzinfo=timezone.utc).timestamp() > after]
 
     monkeypatch.setattr(extract_load, "get_access_token", lambda: "token")
-    assert extract_load.run(fetch=fake_fetch, get_token=lambda: "t") == 0     # first full load
-    assert extract_load.run(fetch=fake_fetch, get_token=lambda: "t") == 0     # second run: incremental
+    assert extract_load.run(fetch=fake_fetch, get_token=lambda: "t", fetch_detail=NO_DETAIL) == 0  # full load
+    assert extract_load.run(fetch=fake_fetch, get_token=lambda: "t", fetch_detail=NO_DETAIL) == 0  # incremental
 
     with psycopg.connect(db) as conn:
         assert conn.execute("SELECT count(*) FROM raw.strava_activities").fetchone()[0] == 60   # no duplicates
@@ -68,7 +70,7 @@ def test_load_is_incremental_and_idempotent(db, monkeypatch):
 def test_failed_run_is_logged(db):
     def broken_fetch(token, after):
         raise RuntimeError("Strava is down")
-    assert extract_load.run(fetch=broken_fetch, get_token=lambda: "t") == 1
+    assert extract_load.run(fetch=broken_fetch, get_token=lambda: "t", fetch_detail=NO_DETAIL) == 1
     with psycopg.connect(db) as conn:
         assert conn.execute("SELECT status FROM raw.load_runs").fetchone()[0] == "failed"
 
@@ -88,7 +90,17 @@ def test_marts(db):
         _run(6, 7, 5.0, 1.0),                                                  # impossible pace -> filtered out
     ]
     acts[4]["moving_time"] = 3600
-    assert extract_load.run(fetch=lambda t, after: acts, get_token=lambda: "t") == 0
+    # best efforts: run 3 (10 km) contains the fastest 5 km (20:00), faster than the 5 km run 2 (23:24)
+    efforts = {
+        1_000_002: [("5k", 5000, 1404, "2026-03-03T07:00:00Z")],
+        1_000_003: [("5k", 5000, 1200, "2026-03-04T07:00:00Z"), ("10k", 10000, 3300, "2026-03-04T07:00:00Z")],
+        1_000_004: [("Half-Marathon", 21097, 7500, "2026-03-06T07:00:00Z")],
+    }
+    def detail(token, activity_id):
+        return {"id": activity_id, "best_efforts": [
+            {"name": n, "distance": d, "elapsed_time": t, "start_date_local": sd}
+            for n, d, t, sd in efforts.get(activity_id, [])]}
+    assert extract_load.run(fetch=lambda t, after: acts, get_token=lambda: "t", fetch_detail=detail) == 0
 
     with psycopg.connect(db) as conn:
         q = lambda sql: conn.execute(sql).fetchall()
@@ -100,11 +112,32 @@ def test_marts(db):
         # pace_trend: bad pace removed, moving average of the first two runs = (5.0 + 4.5) / 2
         pt = q("SELECT pace_min_per_km::float, pace_5_run_avg::float FROM marts.pace_trend ORDER BY activity_date")
         assert len(pt) == 4 and pt[1] == (4.5, 4.75)
-        # personal_bests: fastest 5K is the 4:30/km run, estimated time 22:30
-        pb = q("SELECT distance_bucket, rank, pace_min_per_km::float, estimated_time::text "
-               "FROM marts.personal_bests ORDER BY distance_bucket, rank")
-        assert ("5K", 1, 4.5, "00:22:30") in pb and ("5K", 2, 5.0, "00:25:00") in pb
+        # personal_bests (from best efforts): the 5 km inside the 10 km run is the PB
+        pb = q("SELECT distance, rank, activity_id, time::text FROM marts.personal_bests ORDER BY distance, rank")
+        assert ("5K", 1, 1_000_003, "00:20:00") in pb and ("5K", 2, 1_000_002, "00:23:24") in pb
         assert {r[0] for r in pb} == {"5K", "10K", "Half marathon"}
+        # details were only fetched for runs (5 runs, not the ride)
+        assert conn.execute("SELECT count(*) FROM raw.strava_activity_details").fetchone()[0] == 5
         # training_streaks: Mon-Wed (3 days) and Fri-Sat (2 days)
         st = q("SELECT streak_start::text, days FROM marts.training_streaks ORDER BY streak_start")
         assert st == [("2026-03-02", 3), ("2026-03-06", 2)]
+
+
+def test_details_backfill_respects_rate_limit(db, monkeypatch):
+    t0 = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    acts = [_run(i, 1 + i % 28, 5.0, 5.0) for i in range(10)]
+    monkeypatch.setattr(extract_load, "DETAILS_PER_RUN", 4)
+    calls = []
+    def limited(token, activity_id):
+        calls.append(activity_id)
+        if len(calls) == 7:                       # Strava says "too many requests" on the 7th call
+            raise extract_load.RateLimited()
+        return {"id": activity_id, "best_efforts": []}
+
+    run = lambda: extract_load.run(fetch=lambda t, a: acts, get_token=lambda: "t", fetch_detail=limited)
+    assert run() == 0                             # run 1: 4 details (the limit per run)
+    assert run() == 0                             # run 2: 2 details, then rate limited -> stops, still success
+    assert run() == 0                             # run 3: the last 4
+    with psycopg.connect(db) as conn:
+        assert conn.execute("SELECT count(*) FROM raw.strava_activity_details").fetchone()[0] == 10
+        assert [r[0] for r in conn.execute("SELECT status FROM raw.load_runs").fetchall()] == ["success"] * 3

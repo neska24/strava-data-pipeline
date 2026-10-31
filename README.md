@@ -8,7 +8,7 @@ into analytics tables with SQL.
 ## Architecture
 
 ```
-Strava API ──(Python, GitHub Actions, daily)──> PostgreSQL
+Strava API ──(Python, GitHub Actions, every 3 h)──> PostgreSQL
                                                  ├── raw       JSON exactly as the API returned it
                                                  ├── staging   typed columns, units converted
                                                  ├── core      dim_sport + fact_activities
@@ -21,6 +21,7 @@ Strava API ──(Python, GitHub Actions, daily)──> PostgreSQL
 * **Incremental load:** each run only asks Strava for activities newer than the latest one in the database (minus one week, so edited activities are refreshed).
 * **Idempotent:** `activity_id` is the primary key and the load is an upsert, so re-running a job never creates duplicates.
 * **Observable:** every run is written to `raw.load_runs` with its status and row count.
+* **Rate-limit aware backfill:** personal bests need one extra API call per run (Strava's "best efforts"). Each run fetches at most 80 of these, newest first, and stops politely when Strava says "too many requests"; the next run continues where it stopped.
 * **Tested:** an end-to-end test runs the pipeline against a real PostgreSQL (in CI) with fake Strava data.
 
 ## Project structure
@@ -41,7 +42,7 @@ tests/test_pipeline.py     end-to-end test
 |---|---|---|
 | `marts.weekly_volume` | How much did I train each week, per sport? | `DATE_TRUNC`, `GROUP BY` |
 | `marts.pace_trend` | Am I getting faster? | window function, 5-run moving average |
-| `marts.personal_bests` | Fastest 5K, 10K and half marathon? | CTEs, `CASE`, `ROW_NUMBER() OVER (PARTITION BY ...)` |
+| `marts.personal_bests` | Fastest 1K, 5K, 10K and half marathon, also inside longer runs? | JSON unnesting (`jsonb_array_elements`), `ROW_NUMBER() OVER (PARTITION BY ...)` |
 | `marts.training_streaks` | Longest streaks of consecutive training days? | gaps-and-islands (`date - ROW_NUMBER()`) |
 
 ## Run it

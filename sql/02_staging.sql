@@ -21,3 +21,15 @@ SELECT
     NULLIF(payload->'map'->>'summary_polyline', '')         AS polyline,
     fetched_at
 FROM raw.strava_activities;
+
+-- STAGING: one row per best effort. Strava stores, for every run, the fastest time over standard
+-- distances (1k, 5k, 10k, half marathon, ...) anywhere inside that run.
+CREATE OR REPLACE VIEW staging.best_efforts AS
+SELECT
+    d.activity_id,
+    e->>'name'                                   AS effort_name,     -- e.g. '5k', '10k', 'Half-Marathon'
+    (e->>'distance')::numeric                    AS distance_m,
+    (e->>'elapsed_time')::int                    AS elapsed_time_s,
+    replace(e->>'start_date_local', 'Z', '')::timestamp AS start_time_local
+FROM raw.strava_activity_details d
+CROSS JOIN LATERAL jsonb_array_elements(COALESCE(d.payload->'best_efforts', '[]'::jsonb)) AS e;

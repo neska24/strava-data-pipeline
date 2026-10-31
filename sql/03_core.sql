@@ -33,3 +33,15 @@ SELECT
          THEN round(a.moving_time_s / 60.0 / a.distance_km, 2) END AS pace_min_per_km
 FROM staging.activities a
 LEFT JOIN core.dim_sport s USING (sport_type);
+
+-- fact_best_efforts: the fastest time over a standard distance inside each run.
+CREATE OR REPLACE VIEW core.fact_best_efforts AS
+SELECT
+    activity_id,
+    start_time_local::date                                        AS activity_date,
+    effort_name,
+    distance_m,
+    elapsed_time_s,
+    round(elapsed_time_s / 60.0 / (distance_m / 1000), 2)         AS pace_min_per_km
+FROM staging.best_efforts
+WHERE distance_m > 0;
